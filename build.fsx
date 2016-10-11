@@ -204,7 +204,6 @@ Target "Help" (fun _ -> PrintTargets() )
 
 "Build"
   ==> "PrepareRelease"
-  ==> "SourceLink"
   ==> "NuGet"
   ==> "NuGetPush"
   ==> "ReleaseGithub"
