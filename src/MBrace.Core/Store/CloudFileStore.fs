@@ -4,6 +4,7 @@ open System
 open System.IO
 
 open MBrace.Core
+open System.Collections.Generic
 
 type ETag = string
 
@@ -190,6 +191,124 @@ type ICloudFileStore =
     /// <returns>Some reader stream if etag matches, or None if it doesn't.</returns>
     abstract ReadETag : path:string * etag:ETag -> Async<Stream option>
 
+type ICloudFileStoreCollection =
+    inherit ICloudFileStore
+
+    abstract member GetCloudFileStore : fileStoreIdent:string -> ICloudFileStore
+    abstract member GetDefaultCloudFileStore : unit -> ICloudFileStore
+    abstract member FileStores : IDictionary<string, ICloudFileStore>
+
+type CloudFileStoreCollection(defaultFileStore:ICloudFileStore, fileStores:IDictionary<string, ICloudFileStore>) =
+    
+    let defaultFileStoreName = "__default__"
+
+    let parsePath (path:string) =
+        let fileStoreName, fileStore, path =
+            try
+                let uri = Uri(path)
+                let fileStoreName = uri.Scheme
+                let fileStore = fileStores.[fileStoreName]
+                let path = uri.GetComponents(UriComponents.Host ||| UriComponents.Path, UriFormat.Unescaped)
+                fileStoreName, fileStore, path
+            with
+            | :? UriFormatException -> defaultFileStoreName, defaultFileStore, path
+        fileStoreName, fileStore, path
+
+    interface ICloudFileStoreCollection with
+        member x.BeginRead(path: string): Async<Stream> = 
+            let fileStoreName, fileStore, path = parsePath path
+            fileStore.BeginRead(path)
+        member x.BeginWrite(path: string): Async<Stream> = 
+            let fileStoreName, fileStore, path = parsePath path
+            fileStore.BeginWrite(path)
+        member x.Combine(paths: string []): string = 
+            failwith "Not implemented yet"
+        member x.CreateDirectory(directory: string): Async<unit> = 
+            let fileStoreName, fileStore, directory = parsePath directory
+            fileStore.CreateDirectory(directory)
+        member x.DefaultDirectory: string = 
+            defaultFileStore.DefaultDirectory
+        member x.DeleteDirectory(directory: string, recursiveDelete: bool): Async<unit> = 
+            let fileStoreName, fileStore, directory = parsePath directory
+            fileStore.DeleteDirectory(directory, recursiveDelete)
+        member x.DeleteFile(path: string): Async<unit> = 
+            let fileStoreName, fileStore, path = parsePath path
+            fileStore.DeleteFile(path)
+        member x.DirectoryExists(directory: string): Async<bool> = 
+            let fileStoreName, fileStore, path = parsePath directory
+            fileStore.DirectoryExists(path)
+        member x.DownloadToLocalFile(cloudSourcePath: string, localTargetPath: string): Async<unit> = 
+            let fileStoreName, fileStore, cloudSourcePath = parsePath cloudSourcePath
+            fileStore.DownloadToLocalFile(cloudSourcePath, localTargetPath)
+        member x.DownloadToStream(path: string, stream: Stream): Async<unit> = 
+            let fileStoreName, fileStore, path = parsePath path
+            fileStore.DownloadToStream(path, stream)
+        member x.EnumerateDirectories(directory: string): Async<string []> = 
+            let fileStoreName, fileStore, path = parsePath directory
+            fileStore.EnumerateDirectories(path)
+        member x.EnumerateFiles(directory: string): Async<string []> = 
+            let fileStoreName, fileStore, path = parsePath directory
+            fileStore.EnumerateFiles(path)
+        member x.FileExists(path: string): Async<bool> = 
+            let fileStoreName, fileStore, path = parsePath path
+            fileStore.FileExists(path)
+        member x.FileStores: IDictionary<string,ICloudFileStore> = 
+            fileStores
+        member x.GetCloudFileStore(fileStoreIdent: string): ICloudFileStore = 
+            fileStores.[fileStoreIdent]
+        member x.GetDefaultCloudFileStore(): ICloudFileStore = 
+            defaultFileStore
+        member x.GetDirectoryName(path: string): string = 
+            let fileStoreName, fileStore, path = parsePath path
+            fileStore.GetDirectoryName(path)
+        member x.GetFileName(path: string): string = 
+            let fileStoreName, fileStore, path = parsePath path
+            fileStore.GetFileName(path)
+        member x.GetFileSize(path: string): Async<int64> = 
+            let fileStoreName, fileStore, path = parsePath path
+            fileStore.GetFileSize(path)
+        member x.GetLastModifiedTime(path: string, isDirectory: bool): Async<DateTimeOffset> = 
+            let fileStoreName, fileStore, path = parsePath path
+            fileStore.GetLastModifiedTime(path, isDirectory)
+        member x.GetRandomDirectoryName(): string = 
+            defaultFileStore.GetRandomDirectoryName()
+        member x.Id: string = 
+            sprintf "%s+%A" defaultFileStore.Id (fileStores |> Seq.map (fun a -> a.Value.Id) |> String.concat " - ")
+        member x.IsCaseSensitiveFileSystem: bool = 
+            let anyCaseSensitive = fileStores |> Seq.fold (fun s t -> t.Value.IsCaseSensitiveFileSystem || s) false
+            defaultFileStore.IsCaseSensitiveFileSystem || anyCaseSensitive
+        member x.IsPathRooted(path: string): bool = 
+            let _, fs, path = parsePath path
+            fs.IsPathRooted(path)
+        member x.Name: string = "MBrace.Core.CloudFileStoreCollection"
+        member x.ReadETag(path: string, etag: ETag): Async<Stream option> = 
+            let _, fs, path = parsePath path
+            fs.ReadETag(path, etag)
+        member x.RootDirectory: string = 
+            defaultFileStore.RootDirectory
+        member x.TryGetETag(path: string): Async<ETag option> = 
+            let _, fs, path = parsePath path
+            fs.TryGetETag(path)
+        member x.UploadFromLocalFile(localSourcePath: string, cloudTargetPath: string): Async<unit> = 
+            let _, fs, path = parsePath cloudTargetPath
+            fs.UploadFromLocalFile(localSourcePath, path)
+        member x.UploadFromStream(path: string, stream: Stream): Async<unit> = 
+            let _, fs, path = parsePath path
+            fs.UploadFromStream(path, stream)
+        member x.WithDefaultDirectory(directory: string): ICloudFileStore = 
+            let fileStoreName, fileStore, path = parsePath directory
+            let fs = fileStore.WithDefaultDirectory(path)
+            if fileStore = defaultFileStore then CloudFileStoreCollection(fs, fileStores) :> _
+            else
+                let newFileStores = Dictionary(fileStores)
+                newFileStores.Remove(fileStoreName) |> ignore
+                newFileStores.Add(fileStoreName, fs)
+                CloudFileStoreCollection(fs, newFileStores) :> _
+
+        member x.WriteETag(path: string, writer: Stream -> Async<'R>): Async<ETag * 'R> = 
+            let fileStoreName, fileStore, path = parsePath path
+            fileStore.WriteETag(path, writer)
+
 [<AutoOpen>]
 module CloudFileStoreUtils =
     
@@ -235,6 +354,10 @@ module CloudFileStoreUtils =
 
         /// Combines two strings into a single path.
         member store.Combine(path1 : string, path2 : string) = store.Combine [| path1 ; path2 |]
+
+        member store.AddSecondaryStore(fileStoreName : string, fileStore : ICloudFileStore) : ICloudFileStore =
+            let fileStores = [(fileStoreName, fileStore)] |> FSharp.Core.ExtraTopLevelOperators.dict
+            CloudFileStoreCollection(store, fileStores) :> _
 
 
 namespace MBrace.Core
