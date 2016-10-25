@@ -5,6 +5,7 @@ open System.IO
 
 open MBrace.Core
 open System.Collections.Generic
+open System.Text.RegularExpressions
 
 type ETag = string
 
@@ -222,7 +223,14 @@ type CloudFileStoreCollection(defaultFileStore:ICloudFileStore, fileStores:IDict
             let fileStoreName, fileStore, path = parsePath path
             fileStore.BeginWrite(path)
         member x.Combine(paths: string []): string = 
-            failwith "Not implemented yet"
+            let splits = paths.[0].Split([| "://" |], StringSplitOptions.RemoveEmptyEntries)
+            if splits.Length = 1 then
+                defaultFileStore.Combine(paths)
+            else
+                let v = Array.concat [ [| splits.[1] |] ; paths.[1..] ]
+                let fileStore = fileStores.[splits.[0]]
+                let combinedPath = fileStore.Combine(v)
+                sprintf "%s://%s" splits.[0] combinedPath
         member x.CreateDirectory(directory: string): Async<unit> = 
             let fileStoreName, fileStore, directory = parsePath directory
             fileStore.CreateDirectory(directory)
